@@ -1,10 +1,12 @@
 /** @type {import('next').NextConfig} */
 
-// .env.local에서 직접 읽기 (Next.js env 로딩 문제 우회)
+// .env.local에서 직접 읽기 (로컬 개발 전용 — 프로덕션에서는 Render 환경변수 사용)
 const fs = require('fs');
 const path = require('path');
 
 function loadEnvLocal() {
+  // 프로덕션(Render)에서는 env vars가 process.env에 이미 설정되므로 스킵
+  if (process.env.NODE_ENV === 'production') return {};
   try {
     const envPath = path.join(__dirname, '.env.local');
     const content = fs.readFileSync(envPath, 'utf8');
@@ -25,11 +27,9 @@ function loadEnvLocal() {
   }
 }
 
-const envVars = loadEnvLocal();
-
 const nextConfig = {
   reactStrictMode: true,
-  env: envVars,
+  env: loadEnvLocal(),
 };
 
 module.exports = nextConfig;

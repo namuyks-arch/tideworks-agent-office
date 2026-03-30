@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: tideworks-agent-office
+    runtime: docker
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: NODE_ENV
+        value: production
