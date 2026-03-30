@@ -13,6 +13,7 @@ import { analyzeGeo } from '@/lib/geo-engine';
 import { saveAllLeadsToNotion } from '@/lib/notion-db';
 import { saveAllLeadsToSheets } from '@/lib/google-sheets';
 import { sendBulkSalesMails, type MailPayload } from '@/lib/naver-works-mail';
+import { fetchBrandsFromNaver } from '@/lib/naver-shopping';
 
 // ─── Step 정의 ───────────────────────────────────────────────────────────────
 
@@ -129,34 +130,51 @@ export async function runLeadDiscovery(
   }});
 
   let brands: BrandCandidate[] = [];
+
+  // 1) 네이버 쇼핑 API로 실제 브랜드 수집 시도
   try {
-    brands = await chatJSON<BrandCandidate[]>(
-      `당신은 B2B 영업 리서처입니다. 아래 조건에 맞는 실제로 존재할 법한 한국 브랜드 6개를 생성해주세요.
+    brands = await fetchBrandsFromNaver(industry, 8);
+    if (brands.length > 0) {
+      emitEvent({ type: 'agent:message', payload: {
+        agentId: 'researcher',
+        content: `📦 네이버 쇼핑에서 실제 브랜드 ${brands.length}개를 수집했습니다.`,
+        type: 'text',
+      }});
+    }
+  } catch {
+    // Naver API 실패 시 Claude fallback
+  }
+
+  // 2) Claude fallback (Naver API 실패하거나 결과 부족할 때)
+  if (brands.length < 4) {
+    try {
+      brands = await chatJSON<BrandCandidate[]>(
+        `당신은 B2B 영업 리서처입니다. 아래 조건에 맞는 실제 한국 브랜드 6개를 반환하세요.
 반드시 JSON 배열만 반환하세요. 설명 텍스트 없이 순수 JSON만 응답합니다.`,
-      [{
-        role: 'user',
-        content: `조건:
+        [{
+          role: 'user',
+          content: `조건:
 - 업종: ${industry}
 - 연매출 규모: ${revenueRange}
 - 채널 조건: ${channelCond}
 
-각 브랜드에 대해 다음 JSON 형식으로 6개 반환:
+실제 존재하는 한국 브랜드 6개를 JSON 형식으로:
 [{"name":"브랜드명","domain":"도메인.com","description":"한 줄 설명","channels":["채널1","채널2"]}]`,
-      }],
-    );
-  } catch {
-    // Claude 실패 시 업종 기반 fallback
-    const names = industry.includes('뷰티')
-      ? ['글로시에코리아', '닥터자르트', '에이프릴스킨', '클리오', '아이소이', '토리든']
-      : industry.includes('패션')
-      ? ['무신사스탠다드', '마르디메크르디', '아더에러', '젝시믹스', '스파오', '에잇세컨즈']
-      : ['오리온', '농심', '하림', '사조', '빙그레', '롯데웰푸드'];
-    brands = names.map((n, i) => ({
-      name: n,
-      domain: `${n.toLowerCase().replace(/\s/g, '')}.com`,
-      description: `${industry} 분야 중견 브랜드`,
-      channels: ['인스타그램', '네이버 쇼핑'],
-    }));
+        }],
+      );
+    } catch {
+      const names = industry.includes('뷰티')
+        ? ['토리든', '아이소이', '조선미녀', '클리오', '에이프릴스킨', '일리윤']
+        : industry.includes('패션')
+        ? ['마르디메크르디', '젝시믹스', '아더에러', '커버낫', '스파오', '에잇세컨즈']
+        : ['오리온', '농심', '하림', '빙그레', '사조', '롯데웰푸드'];
+      brands = names.map((n) => ({
+        name: n,
+        domain: `${n.toLowerCase().replace(/\s/g, '')}.co.kr`,
+        description: `${industry} 분야 브랜드`,
+        channels: ['인스타그램', '네이버 쇼핑'],
+      }));
+    }
   }
 
   emitEvent({ type: 'agent:message', payload: {
