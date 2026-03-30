@@ -256,42 +256,100 @@ JSON 형식:
 }
 
 // ─── 메인 분석 함수 ───────────────────────────────────────────────────────────
-export async function analyzeGeo(input: GeoAnalysisInput): Promise<GeoAnalysisResult> {
-  console.log(`[GeoEngine] 분석 시작: ${input.brand} (${input.domain})`);
+const GEO_API_URL = process.env.GEO_AEO_API_URL ?? 'https://geo-aeo-dashboard.onrender.com';
 
-  // 4 에이전트 병렬 실행 (Agent 3, 4는 Agent 1 결과 의존이므로 순차)
+/** geo-aeo-dashboard REST API 호출 후 내부 Claude 엔진 fallback */
+export async function analyzeGeo(input: GeoAnalysisInput): Promise<GeoAnalysisResult> {
+  // 1) 외부 geo-aeo-dashboard API 시도
+  try {
+    const res = await fetch(`${GEO_API_URL}/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        brand: input.brand,
+        domain: input.domain,
+        industry: input.industry,
+        keywords: input.keywords ?? [],
+        competitors: input.competitors ?? [],
+        revenue_range: input.revenueRange ?? '',
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (res.ok) {
+      const ct = res.headers.get('content-type') ?? '';
+      if (ct.includes('application/json')) {
+        const data = await res.json() as Record<string, unknown>;
+        if (data.geo_score !== undefined) {
+          console.log(`[GeoEngine] 외부 API 성공: ${input.brand}`);
+          return mapExternalResponse(input, data);
+        }
+      }
+    }
+  } catch {
+    // 외부 API 실패 → 내부 엔진으로 fallback
+  }
+
+  // 2) 내부 Claude 4-에이전트 분석 (fallback)
+  console.log(`[GeoEngine] 내부 Claude 엔진 사용: ${input.brand} (${input.domain})`);
+  return analyzeGeoInternal(input);
+}
+
+function mapExternalResponse(input: GeoAnalysisInput, data: Record<string, unknown>): GeoAnalysisResult {
+  const geoScore = (data.geo_score as number) ?? 20;
+  const aeoScore = (data.aeo_score as number) ?? 20;
+  const rawAgents = (data.agents as { agent_name?: string; agentName?: string; emoji?: string; agentEmoji?: string; analysis?: string; confidence_score?: number; confidenceScore?: number }[]) ?? [];
+  return {
+    domain: (data.domain as string) ?? input.domain,
+    domainRating: (data.domain_rating as number) ?? 25,
+    organicTraffic: (data.organic_traffic as number) ?? 5000,
+    organicKeywords: (data.organic_keywords as number) ?? 300,
+    backlinks: (data.backlinks as number) ?? 500,
+    topKeywords: (data.top_keywords as string[]) ?? [],
+    trafficTrend: ((data.traffic_trend as string) ?? 'stable') as 'rising' | 'stable' | 'declining',
+    contentGap: (data.content_gap as string[]) ?? [],
+    keywordGap: (data.keyword_gap as number) ?? 150,
+    geoScore,
+    aeoScore,
+    aiSearchVisibility: Math.round((geoScore + aeoScore) / 2),
+    aiCitationRate: (data.ai_citation_rate as number) ?? 10,
+    competitorDomains: (data.competitor_domains as string[]) ?? [],
+    agents: rawAgents.map((a) => ({
+      agentName: a.agent_name ?? a.agentName ?? 'Agent',
+      agentEmoji: a.emoji ?? a.agentEmoji ?? '🤖',
+      analysis: a.analysis ?? '',
+      confidenceScore: a.confidence_score ?? a.confidenceScore ?? 75,
+    })),
+    weaknessSummary: (data.weakness_summary as string) ?? (data.weaknessSummary as string) ?? '',
+  };
+}
+
+async function analyzeGeoInternal(input: GeoAnalysisInput): Promise<GeoAnalysisResult> {
   const [statusResult, compResult] = await Promise.all([
     runStatusAnalyzer(input),
     runCompetitorAnalyzer(input),
   ]);
-
   const [adResult, actionResult] = await Promise.all([
     runAdStrategyPlanner(input, statusResult.metrics),
     runActionPlanner(input, statusResult.metrics, compResult.metrics),
   ]);
-
-  const statusMetrics = statusResult.metrics;
-  const compMetrics = compResult.metrics;
-
-  const geoScore = statusMetrics.geoScore ?? 20;
-  const aeoScore = compMetrics.aeoScore ?? 20;
-  const aiSearchVisibility = Math.round((geoScore + aeoScore) / 2);
-
+  const geoScore = statusResult.metrics.geoScore ?? 20;
+  const aeoScore = compResult.metrics.aeoScore ?? 20;
   return {
     domain: input.domain,
-    domainRating: statusMetrics.domainRating ?? 25,
-    organicTraffic: statusMetrics.organicTraffic ?? 5000,
-    organicKeywords: statusMetrics.organicKeywords ?? 300,
-    backlinks: statusMetrics.backlinks ?? 500,
-    topKeywords: statusMetrics.topKeywords ?? [],
-    trafficTrend: statusMetrics.trafficTrend ?? 'stable',
-    contentGap: compMetrics.contentGap ?? [],
-    keywordGap: compMetrics.keywordGap ?? 150,
+    domainRating: statusResult.metrics.domainRating ?? 25,
+    organicTraffic: statusResult.metrics.organicTraffic ?? 5000,
+    organicKeywords: statusResult.metrics.organicKeywords ?? 300,
+    backlinks: statusResult.metrics.backlinks ?? 500,
+    topKeywords: statusResult.metrics.topKeywords ?? [],
+    trafficTrend: statusResult.metrics.trafficTrend ?? 'stable',
+    contentGap: compResult.metrics.contentGap ?? [],
+    keywordGap: compResult.metrics.keywordGap ?? 150,
     geoScore,
     aeoScore,
-    aiSearchVisibility,
-    aiCitationRate: statusMetrics.aiCitationRate ?? 10,
-    competitorDomains: compMetrics.competitorDomains ?? [],
+    aiSearchVisibility: Math.round((geoScore + aeoScore) / 2),
+    aiCitationRate: statusResult.metrics.aiCitationRate ?? 10,
+    competitorDomains: compResult.metrics.competitorDomains ?? [],
     agents: [
       { agentName: 'StatusAnalyzer',    agentEmoji: '🔍', analysis: statusResult.analysis, confidenceScore: statusResult.confidence },
       { agentName: 'CompetitorAnalyzer',agentEmoji: '⚔️', analysis: compResult.analysis,   confidenceScore: compResult.confidence },
@@ -301,3 +359,4 @@ export async function analyzeGeo(input: GeoAnalysisInput): Promise<GeoAnalysisRe
     weaknessSummary: actionResult.weaknessSummary,
   };
 }
+
