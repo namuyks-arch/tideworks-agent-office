@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+@theme {
+  /* 토스 스타일 컬러 */
+  --color-tw-navy: #F2F4F6;
+  --color-tw-dark: #ffffff;
+  --color-tw-blue: #3182F6;
+  --color-tw-accent: #3182F6;
+  --color-tw-gold: #3182F6;
+  --color-tw-green: #00B852;
+  --color-tw-yellow: #F59E0B;
+  --color-tw-red: #EF4444;
+
+  /* 에이전트 컬러 — 토스 팔레트 */
+  --color-agent-researcher: #3182F6;
+  --color-agent-analyst: #7C3AED;
+  --color-agent-strategist: #F59E0B;
+  --color-agent-manager: #00B852;
+
+  /* 모드 컬러 */
+  --color-mode-auto: #00B852;
+  --color-mode-approval: #F59E0B;
+  --color-mode-manual: #EF4444;
+
+  /* 폰트 */
+  --font-sans: 'Pretendard', system-ui, sans-serif;
+  --font-pixel: 'Pretendard', system-ui, sans-serif;
+}
+
+/* pixel-border — 토스 스타일로 재정의 (장식 제거) */
+.pixel-border {
+  border: 1px solid #E5E8EB;
+  box-shadow: 0 1px 4px 0 rgba(0, 0, 0, 0.06);
+  image-rendering: auto;
+}
+
+/* pixel-text — Pretendard로 재정의 */
+.pixel-text {
+  font-family: 'Pretendard', system-ui, sans-serif;
+  image-rendering: auto;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 말풍선 — 에이전트 (흰색 카드 스타일) */
+.speech-bubble {
+  position: relative;
+  background: #ffffff;
+  color: #191F28;
+  border-radius: 12px;
+  padding: 12px 16px;
+  border: 1px solid #E5E8EB;
+  font-size: 0.9375rem;
+  font-family: 'Pretendard', 'Noto Sans KR', system-ui, sans-serif;
+  line-height: 1.7;
+  word-break: break-word;
+  letter-spacing: -0.01em;
+  box-shadow: 0 1px 4px 0 rgba(0, 0, 0, 0.06);
+}
+
+/* 에이전트별 왼쪽 강조 선 */
+.speech-bubble-researcher { border-left: 3px solid #3182F6; }
+.speech-bubble-analyst    { border-left: 3px solid #7C3AED; }
+.speech-bubble-strategist { border-left: 3px solid #F59E0B; }
+.speech-bubble-manager    { border-left: 3px solid #00B852; }
+
+/* 사람 메시지 (오른쪽, 토스 블루 라이트) */
+.speech-bubble-human {
+  background: #EBF3FF;
+  color: #191F28;
+  border: 1px solid #C7DCFF;
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 0.9375rem;
+  font-family: 'Pretendard', 'Noto Sans KR', system-ui, sans-serif;
+  line-height: 1.7;
+  letter-spacing: -0.01em;
+}
+
+/* 시스템 메시지 — 회색 pill */
+.speech-bubble-system {
+  background: #F2F4F6;
+  color: #8B95A1;
+  border: none;
+  border-radius: 20px;
+  padding: 4px 14px;
+  font-size: 0.8125rem;
+  font-family: 'Pretendard', system-ui, sans-serif;
+  text-align: center;
+}
+
+/* 상태 표시 애니메이션 — 유지 */
+@keyframes thinking-dots {
+  0%, 20% { opacity: 0; }
+  50% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.thinking-dot {
+  animation: thinking-dots 1.4s infinite;
+}
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
