@@ -30,6 +30,14 @@ function loadEnvLocal() {
 const nextConfig = {
   reactStrictMode: true,
   env: loadEnvLocal(),
+  webpack: (config) => {
+    // Render(Linux)에서 @ path alias가 안 잡히는 경우 명시적으로 추가
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      '@': path.resolve(__dirname, 'src'),
+    };
+    return config;
+  },
 };
 
 module.exports = nextConfig;
