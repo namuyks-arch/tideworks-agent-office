@@ -10,6 +10,9 @@ import type { EmitEvent } from '@/app/api/agents/route';
 import { chatJSON, chat } from '@/lib/claude';
 import { waitForApproval } from '@/lib/approval-store';
 import { analyzeGeo } from '@/lib/geo-engine';
+import { saveAllLeadsToNotion } from '@/lib/notion-db';
+import { saveAllLeadsToSheets } from '@/lib/google-sheets';
+import { sendBulkSalesMails, type MailPayload } from '@/lib/naver-works-mail';
 
 // ─── Step 정의 ───────────────────────────────────────────────────────────────
 
@@ -304,37 +307,147 @@ export async function runLeadDiscovery(
   }
   emitEvent({ type: 'agent:status', payload: { agentId: 'analyst', status: 'done' } });
 
-  // ── ⑤ DB 등록 ─────────────────────────────────────────────────────────────
+  // ── ⑤ DB 등록 (Notion + Google Sheets 실제 저장) ──────────────────────────
   const s5 = LEAD_DISCOVERY_STEPS[4];
   emitEvent({ type: 'pipeline:step', payload: { stepId: s5.id, stepName: s5.name, agentId: s5.agentId, mode: s5.mode, order: s5.order, totalSteps: TOTAL } });
-  emitEvent({ type: 'agent:status',  payload: { agentId: 'manager', status: 'working', currentTask: '스프레드시트에 리드 저장 중' } });
-  await sleep(800);
+  emitEvent({ type: 'agent:status',  payload: { agentId: 'manager', status: 'working', currentTask: 'Notion + Google Sheets 저장 중' } });
 
-  for (const lead of leads) {
-    await sleep(200);
+  emitEvent({ type: 'agent:message', payload: {
+    agentId: 'manager',
+    content: `Notion 데이터베이스와 Google Sheets에 ${leads.length}개 리드를 저장합니다...`,
+    type: 'text',
+  }});
+
+  // Notion과 Google Sheets에 병렬 저장
+  const leadsForDb = leads.map(l => ({ ...l, industry }));
+  const [notionResult, sheetsResult] = await Promise.all([
+    saveAllLeadsToNotion(leadsForDb, industry),
+    saveAllLeadsToSheets(leadsForDb, industry),
+  ]);
+
+  // Notion 결과 보고
+  if (notionResult.saved > 0) {
     emitEvent({ type: 'agent:message', payload: {
       agentId: 'manager',
-      content: `📊 DB 저장: ${lead.name} | ${lead.domain} | 점수 ${lead.score} | ${lead.salesPoint}`,
+      content: `✅ Notion DB: ${notionResult.saved}개 저장 완료${notionResult.failed > 0 ? ` (${notionResult.failed}개 실패)` : ''}`,
+      type: 'text',
+    }});
+  } else {
+    emitEvent({ type: 'agent:message', payload: {
+      agentId: 'manager',
+      content: `⚠️ Notion DB: 저장 불가 — ${notionResult.errors[0] ?? 'NOTION_API_KEY / NOTION_DATABASE_ID 환경 변수를 설정하세요'}`,
       type: 'text',
     }});
   }
-  emitEvent({ type: 'agent:message', payload: {
-    agentId: 'manager',
-    content: `✅ ${leads.length}개 리드가 스프레드시트에 저장되었습니다. (브랜드명·도메인·DA·트래픽·영업포인트 포함)`,
-    type: 'text',
-  }});
+
+  // Google Sheets 결과 보고
+  if (sheetsResult.saved > 0) {
+    emitEvent({ type: 'agent:message', payload: {
+      agentId: 'manager',
+      content: `✅ Google Sheets: ${sheetsResult.saved}개 저장 완료${sheetsResult.failed > 0 ? ` (${sheetsResult.failed}개 실패)` : ''}`,
+      type: 'text',
+    }});
+  } else {
+    emitEvent({ type: 'agent:message', payload: {
+      agentId: 'manager',
+      content: `⚠️ Google Sheets: 저장 불가 — ${sheetsResult.errors[0] ?? 'GOOGLE_SHEETS_SPREADSHEET_ID / GOOGLE_SERVICE_ACCOUNT_KEY 환경 변수를 설정하세요'}`,
+      type: 'text',
+    }});
+  }
+
   emitEvent({ type: 'agent:status', payload: { agentId: 'manager', status: 'done' } });
 
-  // ── ⑥ 메일 발송 대기 ──────────────────────────────────────────────────────
+  // ── ⑥ 영업 메일 발송 (NAVER WORKS) ───────────────────────────────────────
   const s6 = LEAD_DISCOVERY_STEPS[5];
   emitEvent({ type: 'pipeline:step', payload: { stepId: s6.id, stepName: s6.name, agentId: s6.agentId, mode: s6.mode, order: s6.order, totalSteps: TOTAL } });
-  emitEvent({ type: 'agent:status',  payload: { agentId: 'manager', status: 'working', currentTask: '리드 파이프라인 상태 업데이트 중' } });
-  await sleep(600);
+  emitEvent({ type: 'agent:status',  payload: { agentId: 'manager', status: 'working', currentTask: 'Claude로 영업 메일 초안 작성 중' } });
+
+  // 우선순위 높은 리드만 메일 발송 (high + medium)
+  const mailTargets = leads.filter(l => l.priority !== 'low');
 
   emitEvent({ type: 'agent:message', payload: {
     agentId: 'manager',
-    content: `📬 리드 파이프라인 상태 업데이트 완료\n\n${leads.map(l => `• ${l.name} → 상태: 신규 → 발송 대기 (${l.priority === 'high' ? '🔴 우선' : l.priority === 'medium' ? '🟡 일반' : '🔵 관찰'})`).join('\n')}\n\n이정님, 이메일 발송을 진행하시면 됩니다! 📧`,
+    content: `📧 ${mailTargets.length}개 우선 타겟에게 영업 메일을 작성합니다. (우선순위 높음·중간 대상)`,
     type: 'text',
   }});
+
+  // 각 리드별 Claude로 개인화 메일 초안 생성
+  const mailQueue: MailPayload[] = [];
+
+  for (const lead of mailTargets) {
+    let bodyHtml = '';
+    try {
+      const draft = await chat(
+        `당신은 인플루언서 마케팅 B2B 영업 담당자입니다. 아래 브랜드 담당자에게 보낼 영업 이메일 HTML 본문을 작성하세요.
+규칙:
+- 길이: 200~300자
+- 톤: 정중하고 전문적인 한국어
+- 첫 문장: 브랜드의 구체적 약점 언급
+- 마지막 문장: 미팅 제안
+- <p> 태그만 사용, 스타일 없이
+- HTML 본문만 출력, 설명 텍스트 없음`,
+        [{
+          role: 'user',
+          content: `브랜드: ${lead.name}
+도메인: ${lead.domain}
+핵심 약점: ${lead.salesPoint}
+SEO 현황: ${lead.seoSummary}
+예상 딜: ${lead.dealSize}
+업종: ${industry}`,
+        }],
+      );
+      bodyHtml = draft.trim();
+    } catch {
+      bodyHtml = `<p>안녕하세요, ${lead.name} 마케팅 담당자님.</p><p>현재 ${lead.salesPoint} 문제를 발견하여 연락드립니다. 타이드웍스의 인플루언서 마케팅 솔루션으로 개선하실 수 있도록 간단한 미팅을 제안드립니다.</p>`;
+    }
+
+    const recipientEmail = input.recipientEmail ?? '';
+    if (recipientEmail) {
+      mailQueue.push({
+        to: recipientEmail,
+        toName: `${lead.name} 담당자`,
+        subject: `[타이드웍스] ${lead.name} 인플루언서 마케팅 제안`,
+        bodyHtml,
+      });
+    }
+
+    emitEvent({ type: 'agent:message', payload: {
+      agentId: 'manager',
+      content: `✏️ ${lead.name} 메일 초안 완성:\n제목: [타이드웍스] ${lead.name} 인플루언서 마케팅 제안`,
+      type: 'text',
+    }});
+  }
+
+  // NAVER WORKS로 실제 발송
+  if (mailQueue.length > 0) {
+    emitEvent({ type: 'agent:message', payload: {
+      agentId: 'manager',
+      content: `📨 NAVER WORKS로 ${mailQueue.length}통 발송 시작...`,
+      type: 'text',
+    }});
+
+    const mailResult = await sendBulkSalesMails(mailQueue);
+
+    if (mailResult.sent > 0) {
+      emitEvent({ type: 'agent:message', payload: {
+        agentId: 'manager',
+        content: `✅ 메일 발송 완료: ${mailResult.sent}통 성공${mailResult.failed > 0 ? `, ${mailResult.failed}통 실패` : ''}`,
+        type: 'text',
+      }});
+    } else {
+      emitEvent({ type: 'agent:message', payload: {
+        agentId: 'manager',
+        content: `⚠️ 메일 발송 불가 — ${mailResult.errors[0] ?? 'NAVER_WORKS_* 환경 변수를 설정하세요'}\n\n메일 초안은 위에서 확인하실 수 있습니다.`,
+        type: 'text',
+      }});
+    }
+  } else {
+    emitEvent({ type: 'agent:message', payload: {
+      agentId: 'manager',
+      content: `📋 메일 초안 작성 완료. 실제 발송은 설정에서 수신자 이메일(recipientEmail)을 지정하세요.\n\n${mailTargets.map(l => `• ${l.name}: [타이드웍스] ${l.name} 인플루언서 마케팅 제안`).join('\n')}`,
+      type: 'text',
+    }});
+  }
+
   emitEvent({ type: 'agent:status', payload: { agentId: 'manager', status: 'done' } });
 }

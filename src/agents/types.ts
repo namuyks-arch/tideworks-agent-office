@@ -88,6 +88,7 @@ export interface LeadInput {
   revenueRange: string;       // 연매출 범위 (예: 50억~500억)
   channelCondition: string;   // 채널 조건 (예: SNS 광고 집행 중)
   daThreshold: number;        // SEO 약점 기준 DA (예: 30)
+  recipientEmail?: string;    // 메일 발송 수신자 이메일 (입력 시 NAVER WORKS로 실제 발송)
   // 하위 호환 유지
   companySize?: string;
   region?: string;
