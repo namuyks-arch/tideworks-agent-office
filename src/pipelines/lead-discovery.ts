@@ -9,13 +9,14 @@ import type { LeadInput } from '@/agents/types';
 import type { EmitEvent } from '@/app/api/agents/route';
 import { chatJSON, chat } from '@/lib/claude';
 import { waitForApproval } from '@/lib/approval-store';
+import { analyzeGeo } from '@/lib/geo-engine';
 
 // ─── Step 정의 ───────────────────────────────────────────────────────────────
 
 export const LEAD_DISCOVERY_STEPS = [
   { id: 'ld-1', name: '① 타겟 기준 세팅',    agentId: 'manager',    mode: 'auto',     order: 1 },
   { id: 'ld-2', name: '② 브랜드 후보 수집',  agentId: 'researcher', mode: 'auto',     order: 2 },
-  { id: 'ld-3', name: '③ Ahrefs SEO 진단',   agentId: 'researcher', mode: 'auto',     order: 3 },
+  { id: 'ld-3', name: '③ GEO/AEO 진단',      agentId: 'researcher', mode: 'auto',     order: 3 },
   { id: 'ld-4', name: '④ 영업 포인트 생성',  agentId: 'analyst',    mode: 'approval', order: 4 },
   { id: 'ld-5', name: '⑤ DB 등록',           agentId: 'manager',    mode: 'auto',     order: 5 },
   { id: 'ld-6', name: '⑥ 메일 발송 대기',    agentId: 'manager',    mode: 'auto',     order: 6 },
@@ -169,20 +170,50 @@ export async function runLeadDiscovery(
 
   emitEvent({ type: 'agent:message', payload: {
     agentId: 'researcher',
-    content: `Ahrefs MCP로 각 도메인의 DA·트래픽·키워드갭·백링크·GEO 점수를 분석합니다. (DA ${daThreshold} 이하 타겟)`,
+    content: `GEO/AEO 엔진으로 각 도메인의 DA·트래픽·키워드갭·백링크·GEO 점수를 분석합니다. (DA ${daThreshold} 이하 타겟)`,
     type: 'text',
   }});
 
   const seoMap: Record<string, SeoResult> = {};
   for (const brand of brands) {
-    await sleep(500);
-    const seo = mockSeo(brand, daThreshold);
-    seoMap[brand.name] = seo;
     emitEvent({ type: 'agent:message', payload: {
       agentId: 'researcher',
-      content: `🔍 ${brand.name} (${brand.domain})\n  DA: ${seo.domainRating} | 트래픽: ${seo.organicTraffic.toLocaleString()}/월 | 키워드갭: ${seo.keywordGap}개 | GEO: ${seo.geoScore}점`,
+      content: `🧠 GEO 엔진으로 ${brand.name} (${brand.domain}) 분석 중...`,
       type: 'text',
     }});
+    try {
+      const geo = await analyzeGeo({
+        brand: brand.name,
+        domain: brand.domain,
+        industry,
+        revenueRange,
+        keywords: [],
+        competitors: [],
+      });
+      seoMap[brand.name] = {
+        domain: geo.domain,
+        domainRating: geo.domainRating,
+        organicTraffic: geo.organicTraffic,
+        keywordGap: geo.keywordGap,
+        backlinks: geo.backlinks,
+        geoScore: geo.geoScore,
+        trend: geo.trafficTrend,
+      };
+      emitEvent({ type: 'agent:message', payload: {
+        agentId: 'researcher',
+        content: `✅ ${brand.name} (${brand.domain})\n  DA: ${geo.domainRating} | 트래픽: ${geo.organicTraffic.toLocaleString()}/월 | 키워드갭: ${geo.keywordGap}개 | GEO: ${geo.geoScore}점 | AI인용률: ${geo.aiCitationRate}%\n  📋 약점: ${geo.weaknessSummary}`,
+        type: 'text',
+      }});
+    } catch {
+      // GEO 분석 실패시 mockSeo 폴백
+      const seo = mockSeo(brand, daThreshold);
+      seoMap[brand.name] = seo;
+      emitEvent({ type: 'agent:message', payload: {
+        agentId: 'researcher',
+        content: `⚠️ ${brand.name}: GEO 분석 실패, 추정치 사용\n  DA: ${seo.domainRating} | 트래픽: ${seo.organicTraffic.toLocaleString()}/월 | GEO: ${seo.geoScore}점`,
+        type: 'text',
+      }});
+    }
   }
   emitEvent({ type: 'agent:status', payload: { agentId: 'researcher', status: 'done' } });
 

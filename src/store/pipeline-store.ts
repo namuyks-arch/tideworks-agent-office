@@ -72,7 +72,7 @@ export const PIPELINE_TEMPLATES: Record<PipelineType, { label: string; steps: Om
     steps: [
       { id: 'ld-1', name: '① 타겟 기준 세팅', description: '업종·규모·채널 조건 정의', assignedAgent: 'manager' },
       { id: 'ld-2', name: '② 브랜드 후보 수집', description: '웹서치 + Claude로 브랜드 리스트 자동 수집', assignedAgent: 'researcher' },
-      { id: 'ld-3', name: '③ Ahrefs SEO 진단', description: 'DA·트래픽·키워드갭·백링크·GEO 자동 분석', assignedAgent: 'researcher' },
+      { id: 'ld-3', name: '③ GEO/AEO 진단', description: 'GEO 엔진으로 DA·트래픽·키워드갭·GEO점수 자동 분석', assignedAgent: 'researcher' },
       { id: 'ld-4', name: '④ 영업 포인트 생성', description: 'Claude가 각 브랜드 약점 한 줄 요약', assignedAgent: 'analyst' },
       { id: 'ld-5', name: '⑤ DB 등록', description: '브랜드+영업포인트 스프레드시트 저장', assignedAgent: 'manager' },
       { id: 'ld-6', name: '⑥ 메일 발송 대기', description: '리드 파이프라인 상태: 신규 → 발송 대기', assignedAgent: 'manager' },
